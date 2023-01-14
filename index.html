@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+</head>
+<body>
+    <p>
+        This website uses experimental <a href="https://developer.mozilla.org/en-US/docs/Web/API/HID">WebHID API</a>. It will only work in some browsers (Chrome, Edge and Opera), and might stop working at any time.<br>
+        <span style="color: red; font-weight: bold;">After granting access to your keyboard it could be possible to flash malicious firmware. If you don't trust me 100% (and you shouldn't) – download this page and review the code, or just go away.</span>
+    </p>
+
+    <p><button id="request">Grant access to device</button></p>
+
+    <p>
+        <button data-cmd="setLedTxt 1">Reset LED text</button>
+        <button data-cmd="setLedTxt 0 FOO">Set LED text to FOO</button>
+        <button data-cmd="setLedTxt 0 BAR">Set LED text to BAR</button>
+    </p>
+
+    <p>
+        <button data-cmd="set backlight.strategy functional">Set functional backlight strategy</button>
+        <button data-cmd="set backlight.constantRgb.rgb 255 0 0">Set backlight color to red</button>
+        <button data-cmd="set backlight.constantRgb.rgb 0 255 0">Set backlight color to green</button>
+        <button data-cmd="set backlight.constantRgb.rgb 0 0 255">Set backlight color to blue</button>
+    </p>
+
+    <p>
+        <button data-cmd="set leds.enabled 1">Enable LEDs</button>
+        <button data-cmd="set leds.enabled 0">Disable LEDs</button>
+    </p>
+
+    <p>
+        <button id="read-config">Read config (at least part of it)</button>
+    </p>
+
+    <p>
+        <h1>HID Input</h1>
+        <pre id="output"></pre>
+    </p>
+
+    <script>
+        async function getDevice() {
+            const devices = await navigator.hid.getDevices();
+
+            let usableDevices = devices.filter(function (device) {
+                return device.collections.filter(function (collection) {
+                    if (collection.type !== 0x01) {
+                        return false;
+                    }
+
+                    return collection.inputReports.filter(function (inputReport) {
+                        return inputReport.items.filter(function (item) {
+                            return item.reportCount === 64 && item.reportSize === 8;
+                        }).length > 0;
+                    }).length > 0;
+                }).length > 0;
+            });
+
+            if (usableDevices.length === 0) {
+                throw new Error('UHK not found.');
+            }
+
+            if (usableDevices.length > 1) {
+                throw new Error('More than 1 usable device found.');
+            }
+
+            if (!usableDevices[0].opened) {
+                await usableDevices[0].open();
+
+                usableDevices[0].addEventListener('inputreport', (event) => {
+                    let hex = '';
+                    let text = '';
+                    let len = 0;
+
+                    for (let i=0; i<63; ++i) {
+                        let byte = event.data.getUint8(i);
+                        hex += byte.toString(16).padStart(2, '0') + ' ';
+
+                        if (byte >= 0x20 && byte <= 0x7e) {
+                            text += String.fromCharCode(byte);
+                        } else {
+                            text += '.';
+                        }
+
+                        if (++len >= 32) {
+                            document.getElementById('output').innerText += hex + ': ' + text;
+                            document.getElementById('output').innerHTML += '<br>';
+                            hex = '';
+                            text = '';
+                            len = 0;
+                        }
+                    }
+
+                    if (len > 0) {
+                        for (let i = 32 - len; i > 0; --i) {
+                            hex += '   ';
+                        }
+
+                        document.getElementById('output').innerText += hex + ': ' + text;
+                        document.getElementById('output').innerHTML += '<br>';
+                    }
+                });
+            }
+
+            return usableDevices[0];
+        }
+
+        function getReportId(device) {
+            let inputReports = device.collections[0].inputReports.filter(function (inputReport) {
+                return inputReport.items.filter(function (item) {
+                    return item.reportCount === 64 && item.reportSize === 8;
+                }).length > 0;
+            });
+
+            if (inputReports.length === 0) {
+                throw new Error('No inputReport found.');
+            }
+
+            return inputReports[0].reportId;
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        window.onload = async function () {
+            if (typeof navigator.hid === 'undefined') {
+                document.location.href = document.location.href.replace(/(\/(index.html)?)?$/, '/disabled.html');
+            }
+
+            try {
+                await getDevice();
+            } catch (exception) {
+                console.error(exception);
+
+                document.querySelectorAll('button[data-cmd], #read-config').forEach(function (element) {
+                    element.disabled = true;
+                });
+            }
+        };
+
+        document.getElementById('request').onclick = async function () {
+            await navigator.hid.requestDevice({filters: [
+                {vendorId: 0x1d50, productId: 0x6122}, // UHK 60
+                {vendorId: 0x1d50, productId: 0x6124}, // UHK 60 v2
+            ]});
+
+            let device;
+
+            try {
+                device = await getDevice();
+            } catch (exception) {
+                console.error(exception);
+            }
+
+            if (device !== undefined) {
+                document.querySelectorAll('button[data-cmd], #read-config').forEach(function (element) {
+                    element.disabled = false;
+                });
+            }
+        };
+
+        document.querySelectorAll('button[data-cmd]').forEach(function (element) {
+            element.onclick = async function () {
+                let device = await getDevice();
+
+                await device.sendReport(getReportId(device), (new TextEncoder()).encode("\x14" + element.dataset.cmd));
+            };
+        });
+
+        document.getElementById('read-config').onclick = async function () {
+            let device = await getDevice();
+
+            for (let offset=0; offset < (0x40 - 0x01) * 32; offset += 0x40 - 0x01) {
+                await device.sendReport(getReportId(device), Uint8Array.from([0x04, 0x02, 0x40 - 0x01, offset & 0xff, offset >> 8]));
+            }
+        };
+    </script>
+</body>
+</html>
