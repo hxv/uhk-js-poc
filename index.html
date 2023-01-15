@@ -48,15 +48,7 @@
 
             let usableDevices = devices.filter(function (device) {
                 return device.collections.filter(function (collection) {
-                    if (collection.type !== 0x01) {
-                        return false;
-                    }
-
-                    return collection.inputReports.filter(function (inputReport) {
-                        return inputReport.items.filter(function (item) {
-                            return item.reportCount === 64 && item.reportSize === 8;
-                        }).length > 0;
-                    }).length > 0;
+                    return collection.usage === 0x01 && collection.usagePage === 0xff00; // right/src/usb_descriptors/usb_descriptor_generic_hid_report.h
                 }).length > 0;
             });
 
